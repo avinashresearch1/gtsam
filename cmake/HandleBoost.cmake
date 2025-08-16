@@ -5,6 +5,9 @@
 # BOOST_ROOT: path to install prefix for boost
 # Boost_NO_SYSTEM_PATHS: set to true to keep the find script from ignoring BOOST_ROOT
 
+set(BOOST_ROOT "/home/avinash/opt/boost-install")
+set(Boost_NO_SYSTEM_PATHS ON)
+
 if(MSVC)
     # By default, boost only builds static libraries on windows
     set(Boost_USE_STATIC_LIBS ON)  # only find static libs
