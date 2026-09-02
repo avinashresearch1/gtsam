@@ -10,9 +10,12 @@ class MosekMonolithicSDP {
   bool solve(
       const std::map<std::string, double>& mosekParams =
           std::map<std::string, double>());
+  bool solve(const std::map<std::string, double>& mosekParams,
+             const std::map<std::string, int>& integerMosekParams);
   double objectiveValue() const;
   std::string problemStatus() const;
   double solveTimeSeconds() const;
+  int solveNumThreads() const;
 
   gtsam::Values qcqpValues() const;
   std::vector<double> variableEVRs() const;
@@ -30,9 +33,12 @@ class MosekChordalSDP {
   bool solve(
       const std::map<std::string, double>& mosekParams =
           std::map<std::string, double>());
+  bool solve(const std::map<std::string, double>& mosekParams,
+             const std::map<std::string, int>& integerMosekParams);
   double objectiveValue() const;
   std::string problemStatus() const;
   double solveTimeSeconds() const;
+  int solveNumThreads() const;
 
   gtsam::Values qcqpValues() const;
   std::vector<double> variableEVRs() const;

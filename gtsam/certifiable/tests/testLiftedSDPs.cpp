@@ -328,8 +328,24 @@ TEST(LiftedSDPs, RecoveryQueriesRequireSolve) {
 
   CHECK_EXCEPTION(monolithic.qcqpValues(), std::runtime_error);
   CHECK_EXCEPTION(monolithic.variableEVRs(), std::runtime_error);
+  CHECK_EXCEPTION(monolithic.solveNumThreads(), std::runtime_error);
   CHECK_EXCEPTION(chordal.qcqpValues(), std::runtime_error);
   CHECK_EXCEPTION(chordal.variableEVRs(), std::runtime_error);
+  CHECK_EXCEPTION(chordal.solveNumThreads(), std::runtime_error);
+}
+
+// Verifies integer MOSEK parameters control the optimizer thread count.
+TEST(LiftedSDPs, IntegerMosekParameters) {
+  const std::vector<Pose2> groundTruth =
+      lifted_sdp_tests::Pose2RingPoses(5);
+  const QcqpProblem problem(ExactPoseRingGraph(groundTruth, 9));
+  LiftedSDPProblem<MonolithicSDP, MosekSDPSolver> monolithic(problem);
+  const std::map<std::string, double> floatingPointParams{
+      {"intpntCoTolRelGap", 1e-10}};
+  const std::map<std::string, int> integerParams{{"numThreads", 1}};
+
+  EXPECT(monolithic.solve(floatingPointParams, integerParams));
+  EXPECT_LONGS_EQUAL(1, monolithic.solveNumThreads());
 }
 
 // Verifies rank-one Pose2 slices and matching monolithic/chordal solutions.

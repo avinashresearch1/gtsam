@@ -48,7 +48,8 @@ using LiftedVariableXijToSDPVariableViewMap =
 struct MosekSolveSummary {
   bool solved = false;
   mf::ProblemStatus problemStatus;
-  double optimizerTimeSeconds;
+  double optimizerTimeSeconds = 0.0;
+  int optimizerNumThreads = 0;
 };
 
 // Return the accuracy settings used unless explicitly overridden by the caller.
@@ -73,9 +74,13 @@ std::map<std::string, double> MergeMosekParams(
 
 // Configure and solve a MOSEK model, retaining the public summary fields.
 MosekSolveSummary SolveMosekModel(
-    const mf::Model::t& M, const std::map<std::string, double>& mosekParams) {
+    const mf::Model::t& M, const std::map<std::string, double>& mosekParams,
+    const std::map<std::string, int>& integerMosekParams = {}) {
   const auto mergedParams = MergeMosekParams(mosekParams);
   for (const auto& kv : mergedParams) {
+    M->setSolverParam(kv.first, kv.second);
+  }
+  for (const auto& kv : integerMosekParams) {
     M->setSolverParam(kv.first, kv.second);
   }
 
@@ -83,6 +88,7 @@ MosekSolveSummary SolveMosekModel(
   M->solve();
   summary.problemStatus = M->getProblemStatus();
   summary.optimizerTimeSeconds = M->getSolverDoubleInfo("optimizerTime");
+  summary.optimizerNumThreads = M->getSolverIntInfo("intpntNumThreads");
   summary.solved = true;
 
   return summary;
@@ -711,6 +717,14 @@ bool LiftedSDPProblem<MonolithicSDP, MosekSDPSolver>::solve(
   return impl_->lastSolveSummary.solved;
 }
 
+bool LiftedSDPProblem<MonolithicSDP, MosekSDPSolver>::solve(
+    const std::map<std::string, double>& mosekParams,
+    const std::map<std::string, int>& integerMosekParams) {
+  impl_->lastSolveSummary =
+      SolveMosekModel(impl_->M, mosekParams, integerMosekParams);
+  return impl_->lastSolveSummary.solved;
+}
+
 double LiftedSDPProblem<MonolithicSDP, MosekSDPSolver>::objectiveValue() const {
   impl_->M->acceptedSolutionStatus(mf::AccSolutionStatus::Anything);
   return impl_->M->primalObjValue();
@@ -732,6 +746,13 @@ double LiftedSDPProblem<MonolithicSDP, MosekSDPSolver>::solveTimeSeconds()
     throw std::runtime_error("solveTimeSeconds: solve() has not been called.");
   }
   return impl_->lastSolveSummary.optimizerTimeSeconds;
+}
+
+int LiftedSDPProblem<MonolithicSDP, MosekSDPSolver>::solveNumThreads() const {
+  if (!impl_->lastSolveSummary.solved) {
+    throw std::runtime_error("solveNumThreads: solve() has not been called.");
+  }
+  return impl_->lastSolveSummary.optimizerNumThreads;
 }
 
 Values LiftedSDPProblem<MonolithicSDP, MosekSDPSolver>::qcqpValues() const {
@@ -794,6 +815,14 @@ bool LiftedSDPProblem<ChordalSDP, MosekSDPSolver>::solve(
   return impl_->lastSolveSummary.solved;
 }
 
+bool LiftedSDPProblem<ChordalSDP, MosekSDPSolver>::solve(
+    const std::map<std::string, double>& mosekParams,
+    const std::map<std::string, int>& integerMosekParams) {
+  impl_->lastSolveSummary =
+      SolveMosekModel(impl_->M, mosekParams, integerMosekParams);
+  return impl_->lastSolveSummary.solved;
+}
+
 double LiftedSDPProblem<ChordalSDP, MosekSDPSolver>::objectiveValue() const {
   impl_->M->acceptedSolutionStatus(mf::AccSolutionStatus::Anything);
   return impl_->M->primalObjValue();
@@ -814,6 +843,13 @@ double LiftedSDPProblem<ChordalSDP, MosekSDPSolver>::solveTimeSeconds() const {
     throw std::runtime_error("solveTimeSeconds: solve() has not been called.");
   }
   return impl_->lastSolveSummary.optimizerTimeSeconds;
+}
+
+int LiftedSDPProblem<ChordalSDP, MosekSDPSolver>::solveNumThreads() const {
+  if (!impl_->lastSolveSummary.solved) {
+    throw std::runtime_error("solveNumThreads: solve() has not been called.");
+  }
+  return impl_->lastSolveSummary.optimizerNumThreads;
 }
 
 Values LiftedSDPProblem<ChordalSDP, MosekSDPSolver>::qcqpValues() const {

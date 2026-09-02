@@ -85,6 +85,16 @@ class GTSAM_EXPORT LiftedSDPProblem<MonolithicSDP, MosekSDPSolver> {
    */
   bool solve(const std::map<std::string, double>& mosekParams = {});
 
+  /**
+   * Solve the SDP with floating-point and integer MOSEK parameters.
+   *
+   * @param mosekParams Floating-point MOSEK solver parameter overrides.
+   * @param integerMosekParams Integer MOSEK solver parameter overrides.
+   * @return True after MOSEK completes the solve.
+   */
+  bool solve(const std::map<std::string, double>& mosekParams,
+             const std::map<std::string, int>& integerMosekParams);
+
   /// Return the primal objective value after solve().
   double objectiveValue() const;
 
@@ -93,6 +103,9 @@ class GTSAM_EXPORT LiftedSDPProblem<MonolithicSDP, MosekSDPSolver> {
 
   /// Return MOSEK's optimizer time in seconds after solve().
   double solveTimeSeconds() const;
+
+  /// Return the number of threads used by MOSEK's interior-point optimizer.
+  int solveNumThreads() const;
 
   /// Return one keyed D=1 QCQP vector per diagonal SDP block after solve().
   Values qcqpValues() const;
@@ -140,6 +153,16 @@ class GTSAM_EXPORT LiftedSDPProblem<ChordalSDP, MosekSDPSolver> {
    */
   bool solve(const std::map<std::string, double>& mosekParams = {});
 
+  /**
+   * Solve the SDP with floating-point and integer MOSEK parameters.
+   *
+   * @param mosekParams Floating-point MOSEK solver parameter overrides.
+   * @param integerMosekParams Integer MOSEK solver parameter overrides.
+   * @return True after MOSEK completes the solve.
+   */
+  bool solve(const std::map<std::string, double>& mosekParams,
+             const std::map<std::string, int>& integerMosekParams);
+
   /// Return the primal objective value after solve().
   double objectiveValue() const;
 
@@ -148,6 +171,9 @@ class GTSAM_EXPORT LiftedSDPProblem<ChordalSDP, MosekSDPSolver> {
 
   /// Return MOSEK's optimizer time in seconds after solve().
   double solveTimeSeconds() const;
+
+  /// Return the number of threads used by MOSEK's interior-point optimizer.
+  int solveNumThreads() const;
 
   /// Return one keyed D=1 QCQP vector per diagonal SDP block after solve().
   Values qcqpValues() const;
