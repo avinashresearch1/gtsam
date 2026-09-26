@@ -121,14 +121,21 @@ class RelativeTranslationFactor
             new RelativeTranslationFactor(*this)));
   }
 
-  /// Add this translation factor as a QCQP cost when traits exist.
+  /**
+   * Lower the residual to homogeneous vectors at D=1, or to rotation blocks
+   * and translation rows at D>=d for the synchronization staircase.
+   */
   void qcqpFactors(NonlinearFactorGraph* costs,
-                   NonlinearEqualityConstraints* /*constraints*/,
+                   NonlinearEqualityConstraints* constraints,
                    size_t columnDimension = 1) const override {
+    if (columnDimension == 1) {
+      qcqpFactorsForVector(costs, constraints);
+      return;
+    }
     if (columnDimension < static_cast<size_t>(d)) {
       throw std::invalid_argument(
           "RelativeTranslationFactor::qcqpFactors requires columnDimension "
-          ">= d.");
+          "1 or >= d.");
     }
     if (!costs) {
       throw std::invalid_argument(
@@ -146,6 +153,39 @@ class RelativeTranslationFactor
     costs->push_back(std::make_shared<QpCost>(
         KeyVector{this->key1(), this->key2(), this->key3()}, blockQ,
         columnDimension));
+  }
+
+ private:
+  /** Lower the same residual to mixed homogeneous rotation/point columns. */
+  void qcqpFactorsForVector(
+      NonlinearFactorGraph* costs,
+      NonlinearEqualityConstraints* constraints) const {
+    if (!costs || !constraints) {
+      throw std::invalid_argument(
+          "RelativeTranslationFactor: D=1 requires costs and constraints.");
+    }
+    constexpr int rotationDim = QcqpTraits<Rot>::QcqpVectorDim;
+    constexpr int pointDim = QcqpTraits<Point>::QcqpVectorDim;
+    const double scale = std::sqrt(weight_);
+    using MatrixD = Eigen::Matrix<double, d, d>;
+    using ResidualMatrix = Eigen::Matrix<double, d, rotationDim + 2 * pointDim>;
+    ResidualMatrix B = ResidualMatrix::Zero();
+    // Column-major vec(R): R * measured = sum_c measured(c) * R.col(c).
+    for (int column = 0; column < d; ++column) {
+      B.block(0, 1 + column * d, d, d) =
+          -scale * measured_(column) * MatrixD::Identity();
+    }
+    B.block(0, rotationDim + 1, d, d) = -scale * MatrixD::Identity();
+    B.block(0, rotationDim + pointDim + 1, d, d) =
+        scale * MatrixD::Identity();
+    const Matrix Q = B.transpose() * B;
+    costs->push_back(std::make_shared<QpCost>(
+        KeyVector{this->key1(), this->key2(), this->key3()},
+        SymmetricBlockMatrix(
+            std::vector<DenseIndex>{rotationDim, pointDim, pointDim}, Q)));
+    InsertQcqpConstraints<Rot, 1>(this->key1(), constraints);
+    InsertQcqpConstraints<Point, 1>(this->key2(), constraints);
+    InsertQcqpConstraints<Point, 1>(this->key3(), constraints);
   }
 };
 

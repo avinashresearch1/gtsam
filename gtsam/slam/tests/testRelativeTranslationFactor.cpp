@@ -113,6 +113,28 @@ TEST(RelativeTranslationFactor, QcqpFactorsMatchesNonlinearErrorAtRankD) {
   EXPECT_DOUBLES_EQUAL(directCost, qcqpCost, 1e-10);
 }
 
+// D=1 preserves a nonzero cost and registers both manifold and scale constraints.
+TEST(RelativeTranslationFactor, HomogeneousCostMatchesGraph) {
+  const RelativeTranslationFactor3 factor(kR, kT1, kT2,
+                                          Vector3(0.4, -0.2, 0.7), 3.7);
+  NonlinearFactorGraph graph;
+  graph.push_back(factor.clone());
+  const QcqpProblem problem(graph);
+  Values values, lifted;
+  const Rot3 rotation = Rot3::RzRyRx(0.4, -0.3, 0.2);
+  const Point3 first(1.2, -0.7, 0.5), second(-0.2, 0.8, 1.7);
+  values.insert(kR, rotation);
+  values.insert(kT1, first);
+  values.insert(kT2, second);
+  insertQcqpValue(kR, rotation, lifted);
+  insertQcqpValue(kT1, first, lifted);
+  insertQcqpValue(kT2, second, lifted);
+  EXPECT_DOUBLES_EQUAL(graph.error(values), problem.costs().error(lifted), 1e-10);
+  EXPECT_LONGS_EQUAL(12, problem.eConstraints().size());
+  EXPECT(problem.eConstraints().violationNorm(lifted) < 1e-12);
+  CHECK_EXCEPTION(factor.qcqpFactors(nullptr, nullptr, 1), std::invalid_argument);
+}
+
 // Non-positive weight is rejected at construction.
 TEST(RelativeTranslationFactor, RejectsNonPositiveWeight) {
   CHECK_EXCEPTION(
@@ -162,6 +184,25 @@ TEST(RelativeTranslationFactor, QcqpFactorsMatchesNonlinearErrorAtRankD2) {
   const double directCost =
       0.5 * factor.evaluateError(Ri, ti, tj, {}, {}, {}).squaredNorm();
   EXPECT_DOUBLES_EQUAL(directCost, qcqpCost, 1e-10);
+}
+
+// The planar homogeneous conversion uses the existing full Rot2 vectorization.
+TEST(RelativeTranslationFactor, HomogeneousCostMatchesGraph2) {
+  NonlinearFactorGraph graph;
+  graph.emplace_shared<RelativeTranslationFactor2>(
+      kR, kT1, kT2, Vector2(0.3, -0.2), 2.3);
+  Values values, lifted;
+  const Rot2 rotation(0.6);
+  const Point2 first(-0.3, 0.7), second(1.4, -0.1);
+  values.insert(kR, rotation);
+  values.insert(kT1, first);
+  values.insert(kT2, second);
+  insertQcqpValue(kR, rotation, lifted);
+  insertQcqpValue(kT1, first, lifted);
+  insertQcqpValue(kT2, second, lifted);
+  const QcqpProblem problem(graph);
+  EXPECT_DOUBLES_EQUAL(graph.error(values), problem.costs().error(lifted), 1e-10);
+  EXPECT(problem.eConstraints().violationNorm(lifted) < 1e-12);
 }
 
 }  // namespace Rot2Fixture
