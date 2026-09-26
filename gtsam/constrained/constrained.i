@@ -213,7 +213,6 @@ class QpProblem : gtsam::ConstrainedOptProblem {
   QpProblem();
 
   void addCost(const gtsam::QpCost& cost);
-  void fixValue(gtsam::Key key, const gtsam::Matrix& value);
   void addCost(const gtsam::HessianFactor& factor);
   void addCost(const gtsam::GaussianFactor& factor);
   void addConstraint(const gtsam::LinearConstraint& constraint);
