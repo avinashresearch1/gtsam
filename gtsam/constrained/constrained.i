@@ -213,6 +213,7 @@ class QpProblem : gtsam::ConstrainedOptProblem {
   QpProblem();
 
   void addCost(const gtsam::QpCost& cost);
+  void fixValue(gtsam::Key key, const gtsam::Matrix& value);
   void addCost(const gtsam::HessianFactor& factor);
   void addCost(const gtsam::GaussianFactor& factor);
   void addConstraint(const gtsam::LinearConstraint& constraint);
@@ -231,6 +232,7 @@ class QcqpProblem : gtsam::ConstrainedOptProblem {
                size_t columnDimension = 1);
 
   void addCost(const gtsam::QpCost& cost);
+  void fixValue(gtsam::Key key, const gtsam::Matrix& value);
   void addConstraint(const gtsam::LinearConstraint& constraint);
   void addConstraint(const gtsam::QuadraticConstraint& constraint);
 
@@ -241,17 +243,21 @@ class QcqpProblem : gtsam::ConstrainedOptProblem {
 #include <gtsam/geometry/Rot2.h>
 #include <gtsam/geometry/Rot3.h>
 
-template <T = {gtsam::Rot2, gtsam::Rot3, gtsam::Pose2, gtsam::Pose3}>
+template <T = {gtsam::Rot2, gtsam::Rot3, gtsam::Pose2, gtsam::Pose3,
+               gtsam::Point2, gtsam::Point3}>
 gtsam::Matrix qcqpValue(const T& typedValue);
 
-template <T = {gtsam::Rot2, gtsam::Rot3, gtsam::Pose2, gtsam::Pose3}>
+template <T = {gtsam::Rot2, gtsam::Rot3, gtsam::Pose2, gtsam::Pose3,
+               gtsam::Point2, gtsam::Point3}>
 void insertQcqpValue(gtsam::Key key, const T& typedValue,
                      gtsam::Values& qcqpValues);
 
-template <T = {gtsam::Rot2, gtsam::Rot3, gtsam::Pose2, gtsam::Pose3}>
+template <T = {gtsam::Rot2, gtsam::Rot3, gtsam::Pose2, gtsam::Pose3,
+               gtsam::Point2, gtsam::Point3}>
 T fromQcqpValue(const gtsam::Matrix& qcqpValue);
 
-template <T = {gtsam::Rot2, gtsam::Rot3, gtsam::Pose2, gtsam::Pose3}>
+template <T = {gtsam::Rot2, gtsam::Rot3, gtsam::Pose2, gtsam::Pose3,
+               gtsam::Point2, gtsam::Point3}>
 gtsam::Values extractQcqpValues(const gtsam::Values& qcqpValues);
 
 #include <gtsam/constrained/ConstrainedOptimizer.h>

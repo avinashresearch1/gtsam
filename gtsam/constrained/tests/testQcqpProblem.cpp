@@ -1684,6 +1684,43 @@ TEST(QcqpProblem, FromQcqpValueRequiresExactDimensions) {
 }  // namespace QcqpExtractionFixture
 
 /* ************************************************************************* */
+namespace euclidean_qcqp_tests {
+
+// Homogeneous point recovery normalizes scale and rejects invalid columns.
+TEST(QcqpProblem, PointRoundTrip) {
+  const Point3 point(0.7, -1.2, 2.3);
+  const Matrix lifted = qcqpValue(point);
+  EXPECT_LONGS_EQUAL(4, lifted.rows());
+  EXPECT(assert_equal(point, fromQcqpValue<Point3>(lifted), 1e-12));
+  EXPECT(assert_equal(point, fromQcqpValue<Point3>(-2.0 * lifted), 1e-12));
+  CHECK_EXCEPTION(fromQcqpValue<Point3>(Matrix::Zero(4, 1)), std::invalid_argument);
+  CHECK_EXCEPTION(fromQcqpValue<Point3>(Matrix::Ones(3, 1)), std::invalid_argument);
+  Values mixed;
+  insertQcqpValue(1, point, mixed);
+  insertQcqpValue(2, Rot3(), mixed);
+  const Values points = extractQcqpValues<Point3>(mixed);
+  EXPECT_LONGS_EQUAL(1, points.size());
+  EXPECT(assert_equal(point, points.at<Point3>(1), 1e-12));
+}
+
+// Gauge fixing adds a compiled equality and validates the key and dimensions.
+TEST(QcqpProblem, FixHomogeneousValue) {
+  NonlinearFactorGraph graph;
+  graph.emplace_shared<FrobeniusBetweenFactor<Rot3>>(0, 1, Rot3());
+  QcqpProblem problem(graph);
+  const size_t originalConstraints = problem.eConstraints().size();
+  problem.fixValue(0, qcqpValue(Rot3()));
+  EXPECT_LONGS_EQUAL(originalConstraints + 1, problem.eConstraints().size());
+  EXPECT_LONGS_EQUAL(1, graph.size());
+  CHECK_EXCEPTION(problem.fixValue(9, qcqpValue(Rot3())), std::invalid_argument);
+  CHECK_EXCEPTION(problem.fixValue(0, qcqpValue(Point3::Zero().eval())),
+                  std::invalid_argument);
+  CHECK_EXCEPTION(problem.fixValue(0, Matrix::Zero(10, 1)), std::invalid_argument);
+}
+
+}  // namespace euclidean_qcqp_tests
+/* ************************************************************************* */
+
 int main() {
   TestResult tr;
   return TestRegistry::runAllTests(tr);
