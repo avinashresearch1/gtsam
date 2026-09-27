@@ -114,6 +114,11 @@ class GTSAM_EXPORT LiftedSDPProblem<MonolithicSDP, MosekSDPSolver> {
 /**
  * Chordally decomposed lifted SDP relaxation backed by MOSEK Fusion.
  *
+ * Normalized homogeneous blocks share one leading coordinate per clique.
+ * Complete fixed values are substituted when supported, then restored during
+ * recovery. The symbolic tree covers the remaining variables; key and dimension
+ * accessors continue to describe the original QCQP.
+ *
  * The problem owns its MOSEK model. Call solve() before querying solver
  * results or recovered variables.
  */
@@ -152,7 +157,11 @@ class GTSAM_EXPORT LiftedSDPProblem<ChordalSDP, MosekSDPSolver> {
   /// Return one keyed D=1 QCQP vector per diagonal SDP block after solve().
   Values qcqpValues() const;
 
-  /// Return largest-to-second-largest eigenvalue ratios for recovered blocks.
+  /**
+   * Return largest-to-second-largest eigenvalue ratios for recovered blocks.
+   * Substituted fixed blocks are exactly rank one and report the largest finite
+   * double instead of an infinite ratio.
+   */
   std::vector<double> variableEVRs() const;
 
   /// Return QCQP variable keys in SDP block order.

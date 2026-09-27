@@ -31,6 +31,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <functional>
 #include <map>
 #include <stdexcept>
 #include <vector>
@@ -389,6 +390,35 @@ TEST(LiftedSDPs, Pose3_MonolithicAndChordal) {
                        kObjectiveTolerance);
 }
 
+
+// Separator blocks repeated across several levels retain consistent recovery.
+TEST(LiftedSDPs, ChordalTreeOverlapRecovery) {
+  std::vector<Pose2> truth;
+  for (size_t i = 0; i < 24; ++i) {
+    const double angle = 2 * lifted_sdp_tests::kPi * i / 24;
+    truth.emplace_back(std::cos(angle), std::sin(angle), angle);
+  }
+  const Pose2 first = truth.front();
+  for (auto& pose : truth) pose = first.between(pose);
+  const QcqpProblem problem(ExactPoseRingGraph(truth, 9));
+  for (auto ordering : {ChordalOrderingType::Metis,
+                        ChordalOrderingType::Colamd}) {
+    MosekChordalSDP chordal(problem, ordering);
+    size_t maximumDepth = 0;
+    std::function<void(const SymbolicBayesTree::sharedClique&, size_t)> visit;
+    visit = [&](const SymbolicBayesTree::sharedClique& clique, size_t depth) {
+      maximumDepth = std::max(maximumDepth, depth);
+      for (const auto& child : clique->children) visit(child, depth + 1);
+    };
+    for (const auto& root : chordal.bayesTree().roots()) visit(root, 1);
+    EXPECT(maximumDepth >= 3);
+    const auto result = SolveAndSummarize(&chordal, truth);
+    EXPECT(std::abs(result.objective) < kObjectiveTolerance);
+    EXPECT(result.maximumPoseError < kPoseErrorTolerance);
+    EXPECT(result.minimumEigenvalueRatio > kRankOneEigenRatioThreshold);
+  }
+}
+
 }  // namespace pose_ring_sdp_fixture
 /* ************************************************************************* */
 namespace split_ring_sdp_tests {
@@ -439,6 +469,35 @@ TEST(LiftedSDPs, SplitPose3Ring) {
   check(chordal);
   EXPECT_LONGS_EQUAL(10, graph.size());
   EXPECT_DOUBLES_EQUAL(monolithic.objectiveValue(), chordal.objectiveValue(), 1e-6);
+}
+
+
+// Substitution preserves nonzero fixed values and costs involving only them.
+TEST(LiftedSDPs, FixedValuesAndConstantCost) {
+  QcqpProblem problem;
+  const Vector4 residual{-1, -1, 0, 1};
+  const Vector4 fixedResidual{0, 1, 0, -1};
+  problem.addCost(QpCost({0, 1}, SymmetricBlockMatrix(
+      std::vector<DenseIndex>{2, 2}, Matrix(residual * residual.transpose()))));
+  problem.addCost(QpCost({0, 2}, SymmetricBlockMatrix(
+      std::vector<DenseIndex>{2, 2}, Matrix(fixedResidual * fixedResidual.transpose()))));
+  Matrix2 normalization = Matrix2::Zero();
+  normalization(0, 0) = 1;
+  for (Key key : {0, 1, 2})
+    problem.addConstraint(QuadraticConstraint::Equal(key, normalization, 1));
+  const Matrix first = Vector2{1, 2}, last = Vector2{1, -1};
+  problem.fixValue(0, first);
+  problem.fixValue(2, last);
+  MosekChordalSDP chordal(problem, ChordalOrderingType::Metis);
+  EXPECT(chordal.solve());
+  EXPECT_DOUBLES_EQUAL(4.5, chordal.objectiveValue(), 1e-7);
+  const Values result = chordal.qcqpValues();
+  EXPECT_LONGS_EQUAL(3, result.size());
+  EXPECT(assert_equal(first, result.at<Matrix>(0), 0.0));
+  EXPECT(assert_equal(last, result.at<Matrix>(2), 0.0));
+  EXPECT(assert_equal(Matrix(Vector2{1, 3}), result.at<Matrix>(1), 1e-6));
+  EXPECT_LONGS_EQUAL(3, chordal.orderedKeys().size());
+  for (double ratio : chordal.variableEVRs()) EXPECT(std::isfinite(ratio));
 }
 
 }  // namespace split_ring_sdp_tests

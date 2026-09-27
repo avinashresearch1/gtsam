@@ -20,7 +20,17 @@ if(NOT GTSAM_USE_MOSEK)
   list(APPEND excluded_examples
       "Pose2RingSLAM_LiftedSDP.cpp"
       "Pose3RingSLAM_LiftedSDP.cpp"
-      "Rot2RingQcqpToMonolithicSDP.cpp")
+      "Rot2RingQcqpToMonolithicSDP.cpp"
+      "Pose3RingSLAM_Chordal.cpp"
+      "Pose3RingSLAM_Monolithic.cpp"
+      "Pose3RingSLAM_Staircase.cpp")
 endif()
 
 gtsamAddExamplesGlob("*.cpp" "${excluded_examples}" "gtsam;${Boost_PROGRAM_OPTIONS_LIBRARY}" ${GTSAM_BUILD_EXAMPLES_ALWAYS})
+
+if(GTSAM_USE_MOSEK)
+  find_package(Threads REQUIRED)
+  foreach(method Chordal Monolithic Staircase)
+    target_link_libraries(Pose3RingSLAM_${method} Threads::Threads)
+  endforeach()
+endif()
