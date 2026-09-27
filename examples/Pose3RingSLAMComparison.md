@@ -37,12 +37,40 @@ driver adds a 1000-second staircase optimizer-call guard. Non-Linux runs stop
 before construction because these resource guards are Linux-specific.
 
 Exit 0 means the example's checks pass; 2 means a returned iterate fails checks;
-3 means a sampled resource guard fired; 1 means an exception. The original-noise
-N=1000 chordal case is expected to return **2**, with Unknown/stall, recovered
-objective about 87.4180622182 and SDP primal objective about 1.25405586024. The
-paper's rank-one rule gives 5/1000 poses. This reproduces the recorded numerical
-failure while fixing the memory blow-up. Monolithic can reach the memory guard;
-staircase can finish without a rounded solution.
+3 means a sampled resource guard fired; 1 means an exception. Unknown status is
+never promoted to a certificate. Monolithic can still reach the memory guard.
+
+The direct SDP algorithms now append five column-orthogonality equations and
+six cyclic cross-product equations to the existing Rot3 QCQP constraints. These
+are identities on SO(3): they do not change the nonlinear factor graph or its
+feasible poses, but they strengthen its relaxation. One redundant column-norm
+equation is omitted because the row constraints already fix the trace.
+
+By default, **all three algorithms use the same local initializer**, obtained by
+LM on the unchanged nonlinear graph from odometry. Use `--initialization odometry`
+to skip that local solve. The initializer's time is included in construction
+and whole-process timings, not MOSEK or staircase optimizer timings.
+
+Direct methods use the initializer translations as coordinate origins,
+`t_i = c_i + u_i`, compiling each cost as `S.transpose() * Q * S`. Fixed-gauge
+origins are zero. They recover each original-coordinate moment matrix by the
+inverse congruence before extracting values or checking rank. The public
+`momentMatrix(key)` accessor supports this for both SDP formulations.
+Rotations are projected during recovery; **no LM refinement follows the SDP**.
+The program checks the transformed cost and constraints against the original
+graph at a feasible nonoptimal assignment before solving.
+
+The eigenvalue ratio uses the largest eigenvalue divided by the largest
+absolute nonprincipal eigenvalue (with a machine-epsilon floor). This prevents
+a negative second eigenvalue from concealing a non-PSD block. A pose passes
+only when both its original-coordinate rotation and translation ratios exceed
+1e5. The raw constraint and recovery-gap tolerances remain unchanged.
+
+This addresses the original-noise N=1000 case that previously returned 5/1000
+rank-one poses and objective 87.418. The centered, strengthened experiment
+recovers objective approximately 1.30626306625 with 1000/1000 rank-one poses.
+See the paper results for native statuses, numerical residuals and separate
+comparisons against the original and locally initialized staircase.
 
 No prior is added to the relative-only nonlinear graph. Direct QCQP compilation
 selects R(0)=I and t(0)=0. Both algorithms use the same objective; staircase uses

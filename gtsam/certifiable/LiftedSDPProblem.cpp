@@ -943,6 +943,16 @@ LiftedSDPProblem<MonolithicSDP, MosekSDPSolver>::variableEVRs() const {
                              impl_->orderedKeys, impl_->orderedKeyDims);
 }
 
+Matrix LiftedSDPProblem<MonolithicSDP, MosekSDPSolver>::momentMatrix(Key key) const {
+  if (!impl_->lastSolveSummary.solved) {
+    throw std::runtime_error("momentMatrix: solve() has not been called.");
+  }
+  impl_->M->acceptedSolutionStatus(mf::AccSolutionStatus::Anything);
+  return ExtractSolvedMatrixBlock(
+      impl_->liftedVariableXijToSDPVariableViewMap.at({key, key}),
+      impl_->orderedKeyDims.at(key));
+}
+
 const KeyVector& LiftedSDPProblem<MonolithicSDP, MosekSDPSolver>::orderedKeys()
     const {
   return impl_->orderedKeys;
@@ -1033,6 +1043,21 @@ std::vector<double> LiftedSDPProblem<ChordalSDP, MosekSDPSolver>::variableEVRs()
   return ComputeVariableEVRs(impl_->liftedVariableXijToSDPVariableViewMap,
                              impl_->orderedKeys, impl_->orderedKeyDims,
                            impl_->fixedValues);
+}
+
+Matrix LiftedSDPProblem<ChordalSDP, MosekSDPSolver>::momentMatrix(Key key) const {
+  if (!impl_->lastSolveSummary.solved) {
+    throw std::runtime_error("momentMatrix: solve() has not been called.");
+  }
+  const auto fixed = impl_->fixedValues.exists(key);
+  if (fixed) {
+    const Matrix& value = impl_->fixedValues.at<Matrix>(key);
+    return value * value.transpose();
+  }
+  impl_->M->acceptedSolutionStatus(mf::AccSolutionStatus::Anything);
+  return ExtractSolvedMatrixBlock(
+      impl_->liftedVariableXijToSDPVariableViewMap.at({key, key}),
+      impl_->orderedKeyDims.at(key));
 }
 
 const KeyVector& LiftedSDPProblem<ChordalSDP, MosekSDPSolver>::orderedKeys()

@@ -97,6 +97,14 @@ class GTSAM_EXPORT LiftedSDPProblem<MonolithicSDP, MosekSDPSolver> {
   /// Return one keyed D=1 QCQP vector per diagonal SDP block after solve().
   Values qcqpValues() const;
 
+  /**
+   * Return the diagonal lifted moment block for a QCQP key after solve().
+   * Blocks retain the original key dimensions, including homogenization.
+   * Substituted fixed values return their exact outer product. This permits
+   * recovery and rank checks after a change of coordinates.
+   */
+  Matrix momentMatrix(Key key) const;
+
   /// Return largest-to-second-largest eigenvalue ratios for recovered blocks.
   std::vector<double> variableEVRs() const;
 
@@ -156,6 +164,14 @@ class GTSAM_EXPORT LiftedSDPProblem<ChordalSDP, MosekSDPSolver> {
 
   /// Return one keyed D=1 QCQP vector per diagonal SDP block after solve().
   Values qcqpValues() const;
+
+  /**
+   * Return the diagonal lifted moment block for a QCQP key after solve().
+   * Blocks retain the original key dimensions, including homogenization.
+   * Substituted fixed values return their exact outer product. This permits
+   * recovery and rank checks after a change of coordinates.
+   */
+  Matrix momentMatrix(Key key) const;
 
   /**
    * Return largest-to-second-largest eigenvalue ratios for recovered blocks.
