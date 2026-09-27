@@ -26,6 +26,7 @@
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
 #include <gtsam/nonlinear/Values.h>
 #include <gtsam/slam/FrobeniusFactor.h>
+#include <gtsam/slam/RelativeTranslationFactor.h>
 
 #include <algorithm>
 #include <cmath>
@@ -389,6 +390,58 @@ TEST(LiftedSDPs, Pose3_MonolithicAndChordal) {
 }
 
 }  // namespace pose_ring_sdp_fixture
+/* ************************************************************************* */
+namespace split_ring_sdp_tests {
+
+// Mixed rotation/translation blocks recover the same exact anchored spatial ring.
+TEST(LiftedSDPs, SplitPose3Ring) {
+  using symbol_shorthand::R;
+  using symbol_shorthand::T;
+  std::vector<Pose3> truth;
+  for (size_t i = 0; i < 5; ++i) {
+    const double theta = 2 * lifted_sdp_tests::kPi * i / 5;
+    truth.emplace_back(Rot3::RzRyRx(0.2 * std::sin(theta), 0.1 * std::cos(theta), theta),
+                       Point3(std::cos(theta), std::sin(theta), 0.3 * std::sin(2 * theta)));
+  }
+  const Pose3 first = truth.front();
+  for (auto& pose : truth) pose = first.between(pose);
+  NonlinearFactorGraph graph;
+  for (size_t i = 0; i < truth.size(); ++i) {
+    const size_t j = (i + 1) % truth.size();
+    const Pose3 relative = truth[i].between(truth[j]);
+    graph.emplace_shared<FrobeniusBetweenFactor<Rot3>>(
+        R(i), R(j), relative.rotation(), noiseModel::Isotropic::Variance(3, 0.1));
+    graph.emplace_shared<RelativeTranslationFactor3>(
+        R(i), T(i), T(j), relative.translation(), 2.5);
+  }
+  QcqpProblem problem(graph);
+  problem.fixValue(R(0), qcqpValue(Rot3()));
+  problem.fixValue(T(0), qcqpValue(Point3(0, 0, 0)));
+  MosekMonolithicSDP monolithic(problem);
+  MosekChordalSDP chordal(problem, ChordalOrderingType::Metis);
+  auto check = [&](auto& solver) {
+    EXPECT(solver.solve());
+    EXPECT(std::abs(solver.objectiveValue()) < 1e-6);
+    const Values recovered = solver.qcqpValues();
+    const Values rotations = extractQcqpValues<Rot3>(recovered);
+    const Values points = extractQcqpValues<Point3>(recovered);
+    Values estimate;
+    for (size_t i = 0; i < truth.size(); ++i) {
+      estimate.insert(R(i), rotations.at<Rot3>(R(i)));
+      estimate.insert(T(i), points.at<Point3>(T(i)));
+      EXPECT(assert_equal(truth[i].rotation(), estimate.at<Rot3>(R(i)), 1e-4));
+      EXPECT(assert_equal(truth[i].translation(), estimate.at<Point3>(T(i)), 1e-4));
+    }
+    EXPECT(graph.error(estimate) < 1e-6);
+    for (double ratio : solver.variableEVRs()) EXPECT(ratio > 1e5);
+  };
+  check(monolithic);
+  check(chordal);
+  EXPECT_LONGS_EQUAL(10, graph.size());
+  EXPECT_DOUBLES_EQUAL(monolithic.objectiveValue(), chordal.objectiveValue(), 1e-6);
+}
+
+}  // namespace split_ring_sdp_tests
 /* ************************************************************************* */
 #endif
 

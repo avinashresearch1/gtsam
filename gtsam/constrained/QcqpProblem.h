@@ -21,6 +21,7 @@
 #include <gtsam/constrained/ConstrainedOptProblem.h>
 #include <gtsam/constrained/LinearConstraint.h>
 #include <gtsam/constrained/QpCost.h>
+#include <gtsam/constrained/QcqpTraits.h>
 #include <gtsam/constrained/QuadraticConstraint.h>
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
 
@@ -40,8 +41,8 @@ template <typename T, int D>
 struct HasQcqpVariableTraits<
     T, D,
     std::void_t<
-        decltype(traits<T>::template QcqpValue<D>(std::declval<T>())),
-        decltype(traits<T>::template QcqpConstraints<D>())>>
+        decltype(QcqpTraits<T>::template QcqpValue<D>(std::declval<T>())),
+        decltype(QcqpTraits<T>::template QcqpConstraints<D>())>>
     : std::true_type {};
 
 template <typename T, int D, typename = void>
@@ -50,20 +51,20 @@ struct HasQcqpExtractionTraits : std::false_type {};
 template <typename T, int D>
 struct HasQcqpExtractionTraits<
     T, D,
-    std::void_t<decltype(traits<T>::template FromQcqpValue<D>(
+    std::void_t<decltype(QcqpTraits<T>::template FromQcqpValue<D>(
         std::declval<const Matrix&>()))>> : HasQcqpVariableTraits<T, D> {};
 
 template <typename T, typename = void>
 struct HasQcqpVectorDim : std::false_type {};
 
 template <typename T>
-struct HasQcqpVectorDim<T, std::void_t<decltype(traits<T>::QcqpVectorDim)>>
+struct HasQcqpVectorDim<T, std::void_t<decltype(QcqpTraits<T>::QcqpVectorDim)>>
     : std::true_type {};
 
 }  // namespace internal
 
 /**
- * Insert one matrix-valued QCQP variable using traits<T>::QcqpValue<D>.
+ * Insert one matrix-valued QCQP variable using QcqpTraits<T>::QcqpValue<D>.
  *
  * D is the number of columns in the matrix-valued QCQP variable. D=1 stores
  * vector QCQPs as r-by-1 matrices; larger D values store matrix-valued QCQP
@@ -72,13 +73,13 @@ struct HasQcqpVectorDim<T, std::void_t<decltype(traits<T>::QcqpVectorDim)>>
 template <typename T, int D = 1>
 void InsertQcqpValue(Key key, const T& value, Values* qcqpValues) {
   static_assert(internal::HasQcqpVariableTraits<T, D>::value,
-                "InsertQcqpValue requires traits<T>::QcqpValue<D> and "
-                "traits<T>::QcqpConstraints<D>.");
+                "InsertQcqpValue requires QcqpTraits<T>::QcqpValue<D> and "
+                "QcqpTraits<T>::QcqpConstraints<D>.");
   if (!qcqpValues) {
     throw std::invalid_argument("InsertQcqpValue: qcqpValues is null.");
   }
 
-  const Matrix qcqpValue = traits<T>::template QcqpValue<D>(value);
+  const Matrix qcqpValue = QcqpTraits<T>::template QcqpValue<D>(value);
   if (qcqpValues->exists(key)) {
     const Matrix existing = qcqpValues->at<Matrix>(key);
     if (existing.rows() != qcqpValue.rows() ||
@@ -101,13 +102,13 @@ void InsertQcqpValue(Key key, const T& value, Values* qcqpValues) {
 template <typename T, int D = 1>
 void InsertQcqpConstraints(Key key, NonlinearEqualityConstraints* constraints) {
   static_assert(internal::HasQcqpVariableTraits<T, D>::value,
-                "InsertQcqpConstraints requires traits<T>::QcqpValue<D> and "
-                "traits<T>::QcqpConstraints<D>.");
+                "InsertQcqpConstraints requires QcqpTraits<T>::QcqpValue<D> and "
+                "QcqpTraits<T>::QcqpConstraints<D>.");
   if (!constraints) {
     throw std::invalid_argument("InsertQcqpConstraints: constraints is null.");
   }
 
-  for (const auto& [A, b] : traits<T>::template QcqpConstraints<D>()) {
+  for (const auto& [A, b] : QcqpTraits<T>::template QcqpConstraints<D>()) {
     bool alreadyPresent = false;
     for (const auto& factor : *constraints) {
       const auto* quadratic =
@@ -140,15 +141,15 @@ void InsertQcqpConstraints(Key key, NonlinearEqualityConstraints* constraints) {
 template <typename T, int D>
 std::vector<std::pair<Key, T>> ExtractQcqpValues(const Values& qcqpValues) {
   static_assert(internal::HasQcqpExtractionTraits<T, D>::value,
-                "ExtractQcqpValues requires traits<T>::QcqpValue<D>, "
+                "ExtractQcqpValues requires QcqpTraits<T>::QcqpValue<D>, "
                 "QcqpConstraints<D>, and FromQcqpValue<D>.");
   static_assert(D != 1 || internal::HasQcqpVectorDim<T>::value,
                 "ExtractQcqpValues<T, 1> requires "
-                "traits<T>::QcqpVectorDim.");
+                "QcqpTraits<T>::QcqpVectorDim.");
   constexpr int expectedRows = [] {
     if constexpr (D == 1) {
       if constexpr (internal::HasQcqpVectorDim<T>::value) {
-        return traits<T>::QcqpVectorDim;
+        return QcqpTraits<T>::QcqpVectorDim;
       } else {
         return Eigen::Dynamic;
       }
@@ -159,7 +160,7 @@ std::vector<std::pair<Key, T>> ExtractQcqpValues(const Values& qcqpValues) {
   std::vector<std::pair<Key, T>> out;
   for (const auto& [key, M] : qcqpValues.extract<Matrix>()) {
     if (M.rows() == expectedRows && M.cols() == D) {
-      out.emplace_back(key, traits<T>::template FromQcqpValue<D>(M));
+      out.emplace_back(key, QcqpTraits<T>::template FromQcqpValue<D>(M));
     }
   }
   return out;
@@ -169,17 +170,17 @@ std::vector<std::pair<Key, T>> ExtractQcqpValues(const Values& qcqpValues) {
 template <typename T>
 Matrix qcqpValue(const T& typedValue) {
   static_assert(internal::HasQcqpVariableTraits<T, 1>::value,
-                "qcqpValue requires traits<T>::QcqpValue<1> and "
-                "traits<T>::QcqpConstraints<1>.");
-  return traits<T>::template QcqpValue<1>(typedValue);
+                "qcqpValue requires QcqpTraits<T>::QcqpValue<1> and "
+                "QcqpTraits<T>::QcqpConstraints<1>.");
+  return QcqpTraits<T>::template QcqpValue<1>(typedValue);
 }
 
 /** Insert a typed value as an exact D=1 QCQP matrix. */
 template <typename T>
 void insertQcqpValue(Key key, const T& typedValue, Values& qcqpValues) {
   static_assert(internal::HasQcqpVariableTraits<T, 1>::value,
-                "insertQcqpValue requires traits<T>::QcqpValue<1> and "
-                "traits<T>::QcqpConstraints<1>.");
+                "insertQcqpValue requires QcqpTraits<T>::QcqpValue<1> and "
+                "QcqpTraits<T>::QcqpConstraints<1>.");
   InsertQcqpValue<T, 1>(key, typedValue, &qcqpValues);
 }
 
@@ -187,21 +188,21 @@ void insertQcqpValue(Key key, const T& typedValue, Values& qcqpValues) {
 template <typename T>
 T fromQcqpValue(const Matrix& qcqpValue) {
   static_assert(internal::HasQcqpExtractionTraits<T, 1>::value,
-                "fromQcqpValue requires traits<T>::QcqpValue<1>, "
+                "fromQcqpValue requires QcqpTraits<T>::QcqpValue<1>, "
                 "QcqpConstraints<1>, and FromQcqpValue<1>.");
   static_assert(internal::HasQcqpVectorDim<T>::value,
-                "fromQcqpValue requires traits<T>::QcqpVectorDim.");
-  return traits<T>::template FromQcqpValue<1>(qcqpValue);
+                "fromQcqpValue requires QcqpTraits<T>::QcqpVectorDim.");
+  return QcqpTraits<T>::template FromQcqpValue<1>(qcqpValue);
 }
 
 /** Extract all matching exact D=1 QCQP vectors as typed Values. */
 template <typename T>
 Values extractQcqpValues(const Values& qcqpValues) {
   static_assert(internal::HasQcqpExtractionTraits<T, 1>::value,
-                "extractQcqpValues requires traits<T>::QcqpValue<1>, "
+                "extractQcqpValues requires QcqpTraits<T>::QcqpValue<1>, "
                 "QcqpConstraints<1>, and FromQcqpValue<1>.");
   static_assert(internal::HasQcqpVectorDim<T>::value,
-                "extractQcqpValues requires traits<T>::QcqpVectorDim.");
+                "extractQcqpValues requires QcqpTraits<T>::QcqpVectorDim.");
   Values typedValues;
   for (const auto& [key, typedValue] : ExtractQcqpValues<T, 1>(qcqpValues)) {
     typedValues.insert(key, typedValue);
@@ -241,6 +242,16 @@ class GTSAM_EXPORT QcqpProblem : public ConstrainedOptProblem {
 
   /** Add a linear constraint. */
   void addConstraint(const LinearConstraint& constraint);
+
+  /**
+   * Fix an existing D=1 homogeneous variable to the supplied column [1; value].
+   * This adds an exact unary linear equality to the compiled QCQP. For a
+   * connected relative-only pose graph, fixing one rotation and translation
+   * selects a gauge without changing the original graph or its minimum cost.
+   * The caller is responsible for using this only when the constraint is a
+   * valid gauge choice (or an intended additional constraint).
+   */
+  void fixValue(Key key, const Matrix& value);
 
   /** Add a quadratic constraint. */
   void addConstraint(const QuadraticConstraint& constraint);
