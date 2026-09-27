@@ -94,6 +94,34 @@ void QcqpProblem::addConstraint(const LinearConstraint& constraint) {
 }
 
 /* ************************************************************************* */
+void QcqpProblem::fixValue(Key key, const Matrix& value) {
+  if (value.cols() != 1 || value.rows() < 2 || !value.allFinite() ||
+      std::abs(value(0, 0) - 1.0) > 1e-12) {
+    throw std::invalid_argument(
+        "QcqpProblem::fixValue requires a finite homogeneous column [1; value].");
+  }
+  bool found = false;
+  for (const auto& factor : costs_) {
+    const auto cost = std::dynamic_pointer_cast<QpCost>(factor);
+    if (!cost) continue;
+    const auto& hessian = cost->hessianFactor();
+    for (auto it = hessian.begin(); it != hessian.end(); ++it) {
+      if (*it != key) continue;
+      found = true;
+      if (hessian.getDim(it) != value.rows()) {
+        throw std::invalid_argument("QcqpProblem::fixValue dimension mismatch.");
+      }
+    }
+  }
+  if (!found) {
+    throw std::invalid_argument("QcqpProblem::fixValue key is not in the objective.");
+  }
+  addConstraint(LinearConstraint::Equal(
+      JacobianFactor(key, Matrix::Identity(value.rows(), value.rows()),
+                     Vector(value.col(0)))));
+}
+
+/* ************************************************************************* */
 void QcqpProblem::addConstraint(const QuadraticConstraint& constraint) {
   if (constraint.isEquality()) {
     eqConstraints_.push_back(constraint.createEqualityFactor());

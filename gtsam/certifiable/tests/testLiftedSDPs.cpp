@@ -26,10 +26,12 @@
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
 #include <gtsam/nonlinear/Values.h>
 #include <gtsam/slam/FrobeniusFactor.h>
+#include <gtsam/slam/RelativeTranslationFactor.h>
 
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <functional>
 #include <map>
 #include <stdexcept>
 #include <vector>
@@ -388,7 +390,117 @@ TEST(LiftedSDPs, Pose3_MonolithicAndChordal) {
                        kObjectiveTolerance);
 }
 
+
+// Separator blocks repeated across several levels retain consistent recovery.
+TEST(LiftedSDPs, ChordalTreeOverlapRecovery) {
+  std::vector<Pose2> truth;
+  for (size_t i = 0; i < 24; ++i) {
+    const double angle = 2 * lifted_sdp_tests::kPi * i / 24;
+    truth.emplace_back(std::cos(angle), std::sin(angle), angle);
+  }
+  const Pose2 first = truth.front();
+  for (auto& pose : truth) pose = first.between(pose);
+  const QcqpProblem problem(ExactPoseRingGraph(truth, 9));
+  for (auto ordering : {ChordalOrderingType::Metis,
+                        ChordalOrderingType::Colamd}) {
+    MosekChordalSDP chordal(problem, ordering);
+    size_t maximumDepth = 0;
+    std::function<void(const SymbolicBayesTree::sharedClique&, size_t)> visit;
+    visit = [&](const SymbolicBayesTree::sharedClique& clique, size_t depth) {
+      maximumDepth = std::max(maximumDepth, depth);
+      for (const auto& child : clique->children) visit(child, depth + 1);
+    };
+    for (const auto& root : chordal.bayesTree().roots()) visit(root, 1);
+    EXPECT(maximumDepth >= 3);
+    const auto result = SolveAndSummarize(&chordal, truth);
+    EXPECT(std::abs(result.objective) < kObjectiveTolerance);
+    EXPECT(result.maximumPoseError < kPoseErrorTolerance);
+    EXPECT(result.minimumEigenvalueRatio > kRankOneEigenRatioThreshold);
+  }
+}
+
 }  // namespace pose_ring_sdp_fixture
+/* ************************************************************************* */
+namespace split_ring_sdp_tests {
+
+// Mixed rotation/translation blocks recover the same exact anchored spatial ring.
+TEST(LiftedSDPs, SplitPose3Ring) {
+  using symbol_shorthand::R;
+  using symbol_shorthand::T;
+  std::vector<Pose3> truth;
+  for (size_t i = 0; i < 5; ++i) {
+    const double theta = 2 * lifted_sdp_tests::kPi * i / 5;
+    truth.emplace_back(Rot3::RzRyRx(0.2 * std::sin(theta), 0.1 * std::cos(theta), theta),
+                       Point3(std::cos(theta), std::sin(theta), 0.3 * std::sin(2 * theta)));
+  }
+  const Pose3 first = truth.front();
+  for (auto& pose : truth) pose = first.between(pose);
+  NonlinearFactorGraph graph;
+  for (size_t i = 0; i < truth.size(); ++i) {
+    const size_t j = (i + 1) % truth.size();
+    const Pose3 relative = truth[i].between(truth[j]);
+    graph.emplace_shared<FrobeniusBetweenFactor<Rot3>>(
+        R(i), R(j), relative.rotation(), noiseModel::Isotropic::Variance(3, 0.1));
+    graph.emplace_shared<RelativeTranslationFactor3>(
+        R(i), T(i), T(j), relative.translation(), 2.5);
+  }
+  QcqpProblem problem(graph);
+  problem.fixValue(R(0), qcqpValue(Rot3()));
+  problem.fixValue(T(0), qcqpValue(Point3(0, 0, 0)));
+  MosekMonolithicSDP monolithic(problem);
+  MosekChordalSDP chordal(problem, ChordalOrderingType::Metis);
+  auto check = [&](auto& solver) {
+    EXPECT(solver.solve());
+    EXPECT(std::abs(solver.objectiveValue()) < 1e-6);
+    const Values recovered = solver.qcqpValues();
+    const Values rotations = extractQcqpValues<Rot3>(recovered);
+    const Values points = extractQcqpValues<Point3>(recovered);
+    Values estimate;
+    for (size_t i = 0; i < truth.size(); ++i) {
+      estimate.insert(R(i), rotations.at<Rot3>(R(i)));
+      estimate.insert(T(i), points.at<Point3>(T(i)));
+      EXPECT(assert_equal(truth[i].rotation(), estimate.at<Rot3>(R(i)), 1e-4));
+      EXPECT(assert_equal(truth[i].translation(), estimate.at<Point3>(T(i)), 1e-4));
+    }
+    EXPECT(graph.error(estimate) < 1e-6);
+    for (double ratio : solver.variableEVRs()) EXPECT(ratio > 1e5);
+  };
+  check(monolithic);
+  check(chordal);
+  EXPECT_LONGS_EQUAL(10, graph.size());
+  EXPECT_DOUBLES_EQUAL(monolithic.objectiveValue(), chordal.objectiveValue(), 1e-6);
+}
+
+
+// Substitution preserves nonzero fixed values and costs involving only them.
+TEST(LiftedSDPs, FixedValuesAndConstantCost) {
+  QcqpProblem problem;
+  const Vector4 residual{-1, -1, 0, 1};
+  const Vector4 fixedResidual{0, 1, 0, -1};
+  problem.addCost(QpCost({0, 1}, SymmetricBlockMatrix(
+      std::vector<DenseIndex>{2, 2}, Matrix(residual * residual.transpose()))));
+  problem.addCost(QpCost({0, 2}, SymmetricBlockMatrix(
+      std::vector<DenseIndex>{2, 2}, Matrix(fixedResidual * fixedResidual.transpose()))));
+  Matrix2 normalization = Matrix2::Zero();
+  normalization(0, 0) = 1;
+  for (Key key : {0, 1, 2})
+    problem.addConstraint(QuadraticConstraint::Equal(key, normalization, 1));
+  const Matrix first = Vector2{1, 2}, last = Vector2{1, -1};
+  problem.fixValue(0, first);
+  problem.fixValue(2, last);
+  MosekChordalSDP chordal(problem, ChordalOrderingType::Metis);
+  EXPECT(chordal.solve());
+  EXPECT_DOUBLES_EQUAL(4.5, chordal.objectiveValue(), 1e-7);
+  const Values result = chordal.qcqpValues();
+  EXPECT_LONGS_EQUAL(3, result.size());
+  EXPECT(assert_equal(first, result.at<Matrix>(0), 0.0));
+  EXPECT(assert_equal(last, result.at<Matrix>(2), 0.0));
+  EXPECT(assert_equal(Matrix(Vector2{1, 3}), result.at<Matrix>(1), 1e-6));
+  EXPECT_LONGS_EQUAL(3, chordal.orderedKeys().size());
+  for (double ratio : chordal.variableEVRs()) EXPECT(std::isfinite(ratio));
+}
+
+}  // namespace split_ring_sdp_tests
 /* ************************************************************************* */
 #endif
 
