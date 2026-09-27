@@ -8,7 +8,9 @@
 /**
  * Compare direct SDPs and the GTSAM synchronization staircase on one immutable
  * split SE(3) ring graph. This uses the staircase from the certifiable PGO
- * notebooks, not the upstream SE-Sync library. No separate LM baseline is run.
+ * notebooks, not the upstream SE-Sync library. By default all solvers receive
+ * the same local initializer; direct SDP methods center translations there.
+ * No nonlinear refinement is applied after SDP recovery.
  * Shared implementation for the three split RingSLAM example executables.
  * Defaults: N=1000, original noise, 1000-second native MOSEK time limit.
  * Use the paper runner for RSS and process-time guards.
@@ -19,6 +21,9 @@
 #include <gtsam/inference/Symbol.h>
 #include <gtsam/slam/FrobeniusFactor.h>
 #include <gtsam/slam/RelativeTranslationFactor.h>
+
+#include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
+#include <Eigen/Eigenvalues>
 
 #include <algorithm>
 #include <atomic>
@@ -179,19 +184,116 @@ inline double elapsed(Clock::time_point start) {
   return std::chrono::duration<double>(Clock::now() - start).count();
 }
 
-// The reference constraints are a coordinate choice in the compiled problem.
-/** Compile the graph and select the first-pose gauge for direct SDP. */
-inline QcqpProblem compile(const NonlinearFactorGraph& graph) {
+using TranslationOrigins = std::map<Key, Point3>;
+
+/** Compute a local initializer without changing measurements or graph factors. */
+inline std::vector<Pose3> localInitialization(const Ring& ring) {
+  LevenbergMarquardtParams params;
+  params.maxIterations = 1000;
+  params.relativeErrorTol = 1e-12;
+  params.absoluteErrorTol = 1e-12;
+  LevenbergMarquardtOptimizer optimizer(ring.graph, splitValues(ring.odometry), params);
+  const Values values = optimizer.optimize();
+  std::vector<Pose3> poses;
+  for (size_t i = 0; i < ring.truth.size(); ++i)
+    poses.emplace_back(values.at<Rot3>(R(i)), values.at<Point3>(T(i)));
+  normalize(&poses);
+  return poses;
+}
+
+/** Append SO(3) identities that are redundant before the rank relaxation. */
+inline void strengthenRotations(QcqpProblem* problem) {
+  const auto coordinate = [](int row, int column) { return 1 + row + 3 * column; };
+  const auto keys = problem->eConstraints().keys();
+  for (Key key : keys) {
+    if (Symbol(key).chr() != 'r') continue;
+    // Existing traits enforce row orthogonality. Five column equations are
+    // independent of those; the third column norm follows from the trace.
+    for (int column = 0; column < 3; ++column) {
+      for (int other = column; other < 3; ++other) {
+        if (column == 2 && other == 2) continue;
+        Matrix A = Matrix::Zero(10, 10);
+        for (int row = 0; row < 3; ++row) {
+          A(coordinate(row, column), coordinate(row, other)) += 0.5;
+          A(coordinate(row, other), coordinate(row, column)) += 0.5;
+        }
+        problem->addConstraint(QuadraticConstraint::Equal(
+            key, A, column == other ? 1.0 : 0.0));
+      }
+    }
+    // Complete the two cyclic cross-product identities missing from traits.
+    for (int column = 1; column < 3; ++column) {
+      for (int row = 0; row < 3; ++row) {
+        const int nextColumn = (column + 1) % 3, lastColumn = (column + 2) % 3;
+        const int nextRow = (row + 1) % 3, lastRow = (row + 2) % 3;
+        Matrix A = Matrix::Zero(10, 10);
+        const auto term = [&](int a, int b, double weight) {
+          A(a, b) += 0.5 * weight;
+          A(b, a) += 0.5 * weight;
+        };
+        term(coordinate(nextRow, nextColumn), coordinate(lastRow, lastColumn), 1);
+        term(coordinate(lastRow, nextColumn), coordinate(nextRow, lastColumn), -1);
+        term(0, coordinate(row, column), -1);
+        problem->addConstraint(QuadraticConstraint::Equal(key, A, 0.0));
+      }
+    }
+  }
+}
+
+/** Compile the identical graph with redundant rotation constraints and t=c+u. */
+inline QcqpProblem compile(const NonlinearFactorGraph& graph,
+                           const TranslationOrigins& origins = {}) {
   QcqpProblem problem(graph);
+  strengthenRotations(&problem);
+  if (!origins.empty()) {
+    NonlinearFactorGraph costs;
+    for (const auto& factor : problem.costs()) {
+      const auto& hessian = dynamic_cast<const QpCost&>(*factor).hessianFactor();
+      std::vector<DenseIndex> dimensions;
+      Matrix change = Matrix::Identity(hessian.information().rows(),
+                                       hessian.information().cols());
+      DenseIndex offset = 0;
+      for (auto it = hessian.begin(); it != hessian.end(); ++it) {
+        dimensions.push_back(hessian.getDim(it));
+        const auto origin = origins.find(*it);
+        if (origin != origins.end()) change.block<3, 1>(offset + 1, offset) = origin->second;
+        offset += hessian.getDim(it);
+      }
+      costs.emplace_shared<QpCost>(hessian.keys(), SymmetricBlockMatrix(
+          dimensions, change.transpose() * hessian.information() * change));
+    }
+    problem = QcqpProblem(costs, problem.eConstraints(), problem.iConstraints());
+  }
   problem.fixValue(R(0), qcqpValue(Rot3()));
   problem.fixValue(T(0), qcqpValue(Point3(0, 0, 0)));
   return problem;
 }
 
+/** Transform a moment block back to the coordinates of the original graph. */
+inline Matrix physicalMoment(Key key, const Matrix& moment,
+                             const TranslationOrigins& origins) {
+  const auto origin = origins.find(key);
+  if (origin == origins.end()) return moment;
+  Matrix change = Matrix::Identity(4, 4);
+  change.block<3, 1>(1, 0) = origin->second;
+  return change * moment * change.transpose();
+}
+
+/** Rank diagnostic that also penalizes negative nonprincipal eigenvalues. */
+inline double rankOneRatio(const Matrix& moment) {
+  Eigen::SelfAdjointEigenSolver<Matrix> solver(moment);
+  if (solver.info() != Eigen::Success) throw std::runtime_error("Moment eigensolver failed");
+  const Vector eigenvalues = solver.eigenvalues();
+  const double largest = eigenvalues(eigenvalues.size() - 1);
+  if (!(largest > 0)) return 0;
+  const double residual = eigenvalues.head(eigenvalues.size() - 1).cwiseAbs().maxCoeff();
+  return largest / std::max(residual, largest * std::numeric_limits<double>::epsilon());
+}
+
 /** Optimize a direct SDP and recover graph poses and diagnostics. */
 template <typename Solver>
 void solveDirect(const Ring& ring, Solver* solver, Summary* summary,
-                 double maxTime) {
+                 double maxTime, const TranslationOrigins& origins) {
   const auto start = Clock::now();
   std::map<std::string, double> options{{"intpntCoTolRelGap", 1e-10},
                                         {"intpntCoTolPfeas", 1e-10},
@@ -203,9 +305,13 @@ void solveDirect(const Ring& ring, Solver* solver, Summary* summary,
   const auto recoveryStart = Clock::now();
   summary->status = solver->problemStatus();
   summary->relaxation = solver->objectiveValue();
-  summary->evrs = solver->variableEVRs();
   summary->evrKeys = solver->orderedKeys();
-  const Values recovered = solver->qcqpValues();
+  Values recovered;
+  for (Key key : summary->evrKeys) {
+    const Matrix moment = physicalMoment(key, solver->momentMatrix(key), origins);
+    recovered.insert(key, Matrix(moment.col(0)));
+    summary->evrs.push_back(rankOneRatio(moment));
+  }
   const Values rotations = extractQcqpValues<Rot3>(recovered);
   const Values points = extractQcqpValues<Point3>(recovered);
   for (size_t i = 0; i < ring.truth.size(); ++i) {
@@ -335,6 +441,22 @@ inline void verifyCompilations(const Ring& ring) {
   }
 }
 
+/** Verify the affine compilation on a feasible, nonoptimal pose assignment. */
+inline void verifyCoordinates(const Ring& ring, const TranslationOrigins& origins) {
+  Values centered;
+  for (size_t i = 0; i < ring.truth.size(); ++i) {
+    insertQcqpValue(R(i), ring.truth[i].rotation(), centered);
+    const Point3 point = ring.truth[i].translation() - origins.at(T(i));
+    insertQcqpValue(T(i), point, centered);
+  }
+  const QcqpProblem problem = compile(ring.graph, origins);
+  const double expected = ring.graph.error(splitValues(ring.truth));
+  if (std::abs(problem.costs().error(centered) - expected) >
+          1e-9 * std::max(1.0, expected) ||
+      problem.eConstraints().violationNorm(centered) > 1e-9)
+    throw std::runtime_error("Centered QCQP changes the original problem");
+}
+
 /** Write solver diagnostics and test recovery accuracy. */
 inline bool reportSummary(const Summary& summary, const Summary& reference,
                    double noiseScale, std::ostream& csv, std::ostream& poses,
@@ -402,13 +524,14 @@ inline int run(int argc, char** argv, const std::string& selectedMethod) {
   try {
     if (argc == 2 && (std::string(argv[1]) == "--help" || std::string(argv[1]) == "-h")) {
       std::cout << "Usage: " << argv[0]
-                << " [--N 1000] [--noise-scale 1] [--max-time 1000] [--output prefix]\n"
+                << " [--N 1000] [--noise-scale 1] [--max-time 1000] [--initialization local|odometry] [--output prefix]\n"
                 << "Method: " << selectedMethod << "; Linux memory guards enabled.\n";
       return 0;
     }
     if (argc % 2 == 0) throw std::invalid_argument("Every option requires a value; use --help.");
     size_t count = 1000;
     double noiseScale = 1.0;
+    std::string initialization = "local";
     double maxTime = 1000.0;
     std::string output = "ring1000_" + selectedMethod;
     for (int i = 1; i < argc; i += 2) {
@@ -420,6 +543,8 @@ inline int run(int argc, char** argv, const std::string& selectedMethod) {
         noiseScale = std::stod(argv[i + 1]);
       else if (option == "--max-time")
         maxTime = std::stod(argv[i + 1]);
+      else if (option == "--initialization")
+        initialization = argv[i + 1];
       else if (option == "--output")
         output = argv[i + 1];
       else
@@ -435,9 +560,20 @@ inline int run(int argc, char** argv, const std::string& selectedMethod) {
     }
     ResourceGuard resources(selectedMethod == "monolithic" ? 3600.0 :
                             selectedMethod == "chordal" ? 1800.0 : 1100.0);
-    const Ring ring = makeRing(count, noiseScale);
+    if (initialization != "local" && initialization != "odometry")
+      throw std::invalid_argument("Initialization must be local or odometry");
+    Ring ring = makeRing(count, noiseScale);
     writeMeasurements(ring, output);
     verifyCompilations(ring);
+    const auto initializationStart = Clock::now();
+    if (initialization == "local") ring.odometry = localInitialization(ring);
+    const double initializationSeconds = elapsed(initializationStart);
+    TranslationOrigins origins;
+    for (size_t i = 0; i < ring.odometry.size(); ++i)
+      origins[T(i)] = ring.odometry[i].translation();
+    verifyCoordinates(ring, origins);
+    std::cout << "INITIALIZATION " << initialization << " seconds=" << initializationSeconds
+              << " objective=" << ring.graph.error(splitValues(ring.odometry)) << std::endl;
     std::ofstream csv(output + ".csv"), poses(output + "_poses.csv"),
         evrs(output + "_evrs.csv");
     if (!csv || !poses || !evrs)
@@ -463,20 +599,21 @@ inline int run(int argc, char** argv, const std::string& selectedMethod) {
         summary = solveStaircase(ring);
       else {
         const auto start = Clock::now();
-        const QcqpProblem problem = compile(ring.graph);
+        const QcqpProblem problem = compile(ring.graph, origins);
         std::cout << "PHASE qcqp_ready construction_start elapsed_s=" << elapsed(start) << std::endl;
         if (method == "monolithic") {
           MosekMonolithicSDP solver(problem);
           summary.build = elapsed(start);
           std::cout << "PHASE construction_finished optimizer_start elapsed_s=" << summary.build << std::endl;
-          solveDirect(ring, &solver, &summary, maxTime);
+          solveDirect(ring, &solver, &summary, maxTime, origins);
         } else {
           MosekChordalSDP solver(problem, ChordalOrderingType::Colamd);
           summary.build = elapsed(start);
           std::cout << "PHASE construction_finished optimizer_start elapsed_s=" << summary.build << std::endl;
-          solveDirect(ring, &solver, &summary, maxTime);
+          solveDirect(ring, &solver, &summary, maxTime, origins);
         }
       }
+      summary.build += initializationSeconds;
       if (reference.poses.empty()) reference = summary;
       passed =
           reportSummary(summary, reference, noiseScale, csv, poses, evrs,

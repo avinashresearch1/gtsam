@@ -328,6 +328,8 @@ TEST(LiftedSDPs, RecoveryQueriesRequireSolve) {
   LiftedSDPProblem<ChordalSDP, MosekSDPSolver> chordal(
       problem, ChordalOrderingType::Metis);
 
+  CHECK_EXCEPTION(monolithic.momentMatrix(0), std::runtime_error);
+  CHECK_EXCEPTION(chordal.momentMatrix(0), std::runtime_error);
   CHECK_EXCEPTION(monolithic.qcqpValues(), std::runtime_error);
   CHECK_EXCEPTION(monolithic.variableEVRs(), std::runtime_error);
   CHECK_EXCEPTION(chordal.qcqpValues(), std::runtime_error);
@@ -496,6 +498,19 @@ TEST(LiftedSDPs, FixedValuesAndConstantCost) {
   EXPECT(assert_equal(first, result.at<Matrix>(0), 0.0));
   EXPECT(assert_equal(last, result.at<Matrix>(2), 0.0));
   EXPECT(assert_equal(Matrix(Vector2{1, 3}), result.at<Matrix>(1), 1e-6));
+  EXPECT(assert_equal(Matrix(first * first.transpose()), chordal.momentMatrix(0), 0.0));
+  EXPECT(assert_equal(Matrix(last * last.transpose()), chordal.momentMatrix(2), 0.0));
+  const Matrix freeMoment = chordal.momentMatrix(1);
+  EXPECT_LONGS_EQUAL(2, freeMoment.rows());
+  EXPECT_LONGS_EQUAL(2, freeMoment.cols());
+  EXPECT(assert_equal(Matrix(freeMoment.col(0)), result.at<Matrix>(1), 1e-12));
+  EXPECT(assert_equal(Matrix(freeMoment.transpose()), freeMoment, 1e-12));
+  CHECK_EXCEPTION(chordal.momentMatrix(99), std::out_of_range);
+  MosekMonolithicSDP monolithic(problem);
+  EXPECT(monolithic.solve());
+  EXPECT(assert_equal(Matrix(monolithic.momentMatrix(1).col(0)),
+                      monolithic.qcqpValues().at<Matrix>(1), 1e-12));
+  CHECK_EXCEPTION(monolithic.momentMatrix(99), std::out_of_range);
   EXPECT_LONGS_EQUAL(3, chordal.orderedKeys().size());
   for (double ratio : chordal.variableEVRs()) EXPECT(std::isfinite(ratio));
 }
