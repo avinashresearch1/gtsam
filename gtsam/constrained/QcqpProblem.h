@@ -245,6 +245,16 @@ class GTSAM_EXPORT QcqpProblem : public ConstrainedOptProblem {
   /** Add a linear constraint. */
   void addConstraint(const LinearConstraint& constraint);
 
+  /**
+   * Fix an existing D=1 homogeneous variable to the supplied column [1; value].
+   * This adds an exact unary linear equality to the compiled QCQP. For a
+   * connected relative-only pose graph, fixing one rotation and translation
+   * selects a gauge without changing the original graph or its minimum cost.
+   * The caller is responsible for using this only when the constraint is a
+   * valid gauge choice (or an intended additional constraint).
+   */
+  void fixValue(Key key, const Matrix& value);
+
   /** Add a quadratic constraint. */
   void addConstraint(const QuadraticConstraint& constraint);
 };
